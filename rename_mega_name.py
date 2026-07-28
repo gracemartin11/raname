@@ -1,20 +1,8 @@
 """
 mega_rename_datetime.py
-- Renames video files in a Mega.nz folder using date + current time + sequential number
-- If the target folder has NO videos → copies (or moves) all videos from a source folder into the target
-- Then renames them with date/time format
-
-Environment variables (required):
-    MEGA_USER          Mega.nz email
-    MEGA_PASS          rclone-obscured password
-    MEGA_FOLDER        Target folder inside Mega (e.g. fbreels)
-
-Optional:
-    SOURCE_FOLDER      Folder to copy/move FROM when target is empty
-    ACTION             "copy" or "move" (default: copy)
-    FILE_EXTENSIONS    comma-separated, default ".mp4"
-    DRY_RUN            "true" / "false" (default: true)
-    LOG_FILE           default: rename_log.txt
+Uses a normal rclone remote named "mega" (configured via RCLONE_CONFIG secret).
+- Renames videos with date + current time
+- If target folder is empty → copy or move videos from source folder, then rename
 """
 
 import subprocess
@@ -24,30 +12,28 @@ import sys
 from datetime import datetime, timezone
 
 # ============ CONFIG ============
-MEGA_USER = os.environ.get("MEGA_USER")
-MEGA_PASS = os.environ.get("MEGA_PASS")
-MEGA_FOLDER = os.environ.get("MEGA_FOLDER")
-SOURCE_FOLDER = os.environ.get("SOURCE_FOLDER")          # only used when target is empty
-ACTION = os.environ.get("ACTION", "copy").lower()        # "copy" or "move"
+MEGA_FOLDER   = os.environ.get("MEGA_FOLDER")          # required
+SOURCE_FOLDER = os.environ.get("SOURCE_FOLDER")        # optional
+ACTION        = os.environ.get("ACTION", "copy").lower()  # copy | move
 FILE_EXTENSIONS = [
     ext.strip().lower()
     for ext in os.environ.get("FILE_EXTENSIONS", ".mp4").split(",")
     if ext.strip()
 ]
-DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
+DRY_RUN  = os.environ.get("DRY_RUN", "true").lower() == "true"
 LOG_FILE = os.environ.get("LOG_FILE", "rename_log.txt")
 
-if not MEGA_USER or not MEGA_PASS or not MEGA_FOLDER:
-    print("ERROR: MEGA_USER, MEGA_PASS and MEGA_FOLDER must be set.")
+if not MEGA_FOLDER:
+    print("ERROR: MEGA_FOLDER must be set")
     sys.exit(1)
 
 if ACTION not in ("copy", "move"):
     print("ERROR: ACTION must be 'copy' or 'move'")
     sys.exit(1)
 
-RCLONE_REMOTE = f":mega,user={MEGA_USER},pass={MEGA_PASS}"
-TARGET_REMOTE = f"{RCLONE_REMOTE}:{MEGA_FOLDER}"
-SOURCE_REMOTE = f"{RCLONE_REMOTE}:{SOURCE_FOLDER}" if SOURCE_FOLDER else None
+# Remote paths (remote name is "mega")
+TARGET_REMOTE = f"mega:{MEGA_FOLDER}"
+SOURCE_REMOTE = f"mega:{SOURCE_FOLDER}" if SOURCE_FOLDER else None
 
 # =================================
 
@@ -67,7 +53,6 @@ def get_video_files(files):
     ]
 
 def generate_datetime_name(existing_names: set, index: int, ext: str) -> str:
-    """Create unique name: 20260728_051932_001.mp4"""
     now = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     while True:
         candidate = f"{now}_{index:03d}{ext}"
@@ -96,17 +81,16 @@ def rename_file(old_name: str, new_name: str) -> bool:
     return success
 
 def transfer_from_source():
-    """Copy or move all videos from SOURCE_FOLDER into MEGA_FOLDER"""
     if not SOURCE_REMOTE:
-        print("Target folder is empty and no SOURCE_FOLDER was provided. Nothing to do.")
+        print("Target is empty and no SOURCE_FOLDER provided. Nothing to do.")
         return []
 
-    print(f"Target folder empty → {ACTION}ing videos from '{SOURCE_FOLDER}' ...")
+    print(f"Target empty → {ACTION}ing from '{SOURCE_FOLDER}' ...")
 
     try:
         source_files = list_remote_files(SOURCE_REMOTE)
     except subprocess.CalledProcessError as e:
-        print(f"Failed to list source folder: {e.stderr}")
+        print(f"Failed to list source: {e.stderr}")
         sys.exit(1)
 
     videos = get_video_files(source_files)
@@ -131,7 +115,7 @@ def main():
         print(f"Failed to list target folder: {e.stderr}")
         sys.exit(1)
     except FileNotFoundError:
-        print("rclone not found. Install it first.")
+        print("rclone not found")
         sys.exit(1)
 
     target_videos = get_video_files(files)
@@ -139,32 +123,27 @@ def main():
     log_lines = []
     success_count = 0
 
-    # ---------- CASE 1: Target has videos → just rename ----------
     if target_videos:
-        print(f"Found {len(target_videos)} video(s) in target. Renaming with date+time...\n")
+        print(f"Found {len(target_videos)} video(s). Renaming with date+time...\n")
         for i, old_name in enumerate(target_videos, 1):
             ext = "." + old_name.rsplit(".", 1)[-1].lower()
             new_name = generate_datetime_name(existing_names, i, ext)
             if rename_file(old_name, new_name):
                 log_lines.append(f"{old_name} → {new_name}")
                 success_count += 1
-
-    # ---------- CASE 2: Target is empty → copy/move from source, then rename ----------
     else:
-        print(f"No videos found in '{MEGA_FOLDER}'.")
+        print(f"No videos in '{MEGA_FOLDER}'.")
         transferred = transfer_from_source()
         if not transferred:
             return
 
-        # After transfer, rename the newly arrived files
-        print("\nNow renaming the transferred files with date+time...")
-        # Refresh the list (in dry-run we still pretend)
+        print("\nRenaming transferred files...")
         if not DRY_RUN:
             files = list_remote_files(TARGET_REMOTE)
             existing_names = {f["Name"] for f in files}
             target_videos = get_video_files(files)
         else:
-            target_videos = transferred  # pretend
+            target_videos = transferred
 
         for i, old_name in enumerate(target_videos, 1):
             ext = "." + old_name.rsplit(".", 1)[-1].lower()
@@ -173,14 +152,13 @@ def main():
                 log_lines.append(f"{old_name} → {new_name}")
                 success_count += 1
 
-    # Write log
     with open(LOG_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(log_lines))
 
     print(f"\nDone. {success_count} file(s) processed.")
     print(f"Log saved to {LOG_FILE}")
     if DRY_RUN:
-        print("\n*** DRY RUN — nothing was changed. Set DRY_RUN=false to execute. ***")
+        print("\n*** DRY RUN — nothing changed. Set dry_run=false to execute. ***")
 
 if __name__ == "__main__":
     main()
