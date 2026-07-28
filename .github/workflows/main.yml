@@ -13,7 +13,7 @@ on:
         type: string
         default: ""
       action:
-        description: "copy or move (when target is empty)"
+        description: "copy or move when target is empty"
         required: false
         type: choice
         options:
@@ -21,7 +21,7 @@ on:
           - move
         default: copy
       dry_run:
-        description: "true = only preview, false = really do it"
+        description: "true = preview only, false = real run"
         required: false
         type: choice
         options:
@@ -39,6 +39,12 @@ jobs:
       - name: Install rclone
         run: curl -fsSL https://rclone.org/install.sh | sudo bash
 
+      - name: Write rclone config from secret
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONFIG }}" > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -46,8 +52,6 @@ jobs:
 
       - name: Run script
         env:
-          MEGA_USER: ${{ secrets.MEGA_USER }}
-          MEGA_PASS: ${{ secrets.MEGA_PASS }}
           MEGA_FOLDER: ${{ inputs.folder_name }}
           SOURCE_FOLDER: ${{ inputs.source_folder }}
           ACTION: ${{ inputs.action }}
