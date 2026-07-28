@@ -1,0 +1,64 @@
+name: Rename / Transfer MP4s in Mega
+
+on:
+  workflow_dispatch:
+    inputs:
+      folder_name:
+        description: "Target folder inside Mega (e.g. fbreels)"
+        required: true
+        type: string
+      source_folder:
+        description: "Source folder (only used when target is empty)"
+        required: false
+        type: string
+        default: ""
+      action:
+        description: "copy or move (when target is empty)"
+        required: false
+        type: choice
+        options:
+          - copy
+          - move
+        default: copy
+      dry_run:
+        description: "true = only preview, false = really do it"
+        required: false
+        type: choice
+        options:
+          - "true"
+          - "false"
+        default: "true"
+
+jobs:
+  rename:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install rclone
+        run: curl -fsSL https://rclone.org/install.sh | sudo bash
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run script
+        env:
+          MEGA_USER: ${{ secrets.MEGA_USER }}
+          MEGA_PASS: ${{ secrets.MEGA_PASS }}
+          MEGA_FOLDER: ${{ inputs.folder_name }}
+          SOURCE_FOLDER: ${{ inputs.source_folder }}
+          ACTION: ${{ inputs.action }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FILE_EXTENSIONS: ".mp4,.mov,.mkv,.webm"
+        run: python mega_rename_datetime.py
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rename-log
+          path: rename_log.txt
+          if-no-files-found: ignore
